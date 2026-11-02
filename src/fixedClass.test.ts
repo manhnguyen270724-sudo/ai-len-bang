@@ -1,0 +1,9 @@
+﻿import {describe,it,expect} from 'vitest';
+import {fixedClass,withFixedClass,PNV27A_NAMES,PNV27A_MALE_NAMES,FIXED_CLASS_ID} from './fixedClass';
+import {load,sample,parseBackup} from './core';
+describe('Lớp PNV27A có sẵn',()=>{
+ it('gán đúng 11 tạo hình nam và 11 tạo hình nữ theo danh sách xác nhận',()=>{const c=fixedClass();expect(c.students.filter(s=>s.avatar==='male').map(s=>s.name)).toEqual([...PNV27A_MALE_NAMES]);expect(c.students.filter(s=>s.avatar==='female')).toHaveLength(11);const old={...c,students:c.students.map(({avatar,...student})=>student)};const migrated=withFixedClass({version:1,active:c.id,classes:[old]});expect(migrated.classes[0].students).toEqual(c.students)});
+ it('có đúng 22 tên, ID ổn định và không gộp hai bạn Trang',()=>{const c=fixedClass();expect(c.name).toBe('PNV27A');expect(c.students).toHaveLength(22);expect(new Set(c.students.map(s=>s.id)).size).toBe(22);expect(c.students.map(s=>s.name)).toEqual(PNV27A_NAMES);expect(c.students).toEqual(fixedClass().students);expect(PNV27A_NAMES).toContain('Nguyễn Thu Trang');expect(PNV27A_NAMES).toContain('Nguyễn Thùy Trang')});
+ it('hiện ngay trên trình duyệt mới',()=>{const {data}=load({getItem:()=>null});expect(data.active).toBe(FIXED_CLASS_ID);expect(data.classes[0].students).toHaveLength(22)});
+ it('thêm vào dữ liệu cũ không ghi đè lớp hay lịch sử, không thêm trùng',()=>{const old={...sample(),name:'Lớp riêng'},data=withFixedClass({version:1,active:old.id,classes:[old]});expect(data.active).toBe(FIXED_CLASS_ID);expect(data.classes[1]).toEqual(old);data.classes[0].session.absent=['pnv27a-01'];data.classes[0].students[0].avatar='female';const again=withFixedClass(data);expect(again.classes).toHaveLength(2);expect(again.classes[0].session.absent).toEqual(['pnv27a-01']);expect(again.classes[0].students[0].avatar).toBe('female');expect(parseBackup(JSON.stringify(again))).toEqual(again)});
+});
