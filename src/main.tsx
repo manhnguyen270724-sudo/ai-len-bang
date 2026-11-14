@@ -4,18 +4,19 @@ import {
   GraduationCap, Plus, Users, UserRound, Shuffle, Layers,
   Volume2, VolumeX, Maximize, Play, History, RotateCcw,
   Check, Download, Upload, X, Pencil, Trash2, Copy, Sparkles,
-  ArrowRight, Search, CheckCircle2, AlertCircle, RefreshCw, FileText
+  ArrowRight, Search, CheckCircle2, AlertCircle, RefreshCw, FileText,
+  Trophy, Medal, Flag, Dice5
 } from 'lucide-react';
 import {
-  type Data, type Classroom, type Group, uid, emptySession,
-  load, save, parseBackup, parseStudents, eligible, pick, divide, signature, formatGroups
+  type Data, type Classroom, type Group, type Student, uid, emptySession,
+  load, save, parseBackup, parseStudents, eligible, pick, divide, signature, formatGroups, shuffle
 } from './core';
 import { Mascot, concepts, type Concept } from './Scene';
 import { FIXED_CLASS_ID, withFixedClass } from './fixedClass';
 import { createClass } from './classes';
 import { ANIMATION_MS } from './choreography';
 import { GameAudio } from './audio';
-import { Stage3D } from './Stage3D';
+import { Stage3D, type RacerType } from './Stage3D';
 import './style.css';
 
 const modes = [
@@ -23,6 +24,14 @@ const modes = [
   { name: 'Chọn nhiều người', icon: Users, desc: 'Gọi nhiều bạn cùng lúc' },
   { name: 'Chia nhóm', icon: Shuffle, desc: 'Chia ngẫu nhiên cả lớp' },
   { name: 'Bốc thăm nhóm', icon: Layers, desc: 'Chọn 1 nhóm thuyết trình' },
+  { name: 'Trường đua thú', icon: Trophy, desc: 'Đua kịch tính chọn Top 1-2-3' },
+];
+
+const RACER_MOUNTS = [
+  { id: 'duck' as RacerType, label: 'Vịt vàng', emoji: '🦆' },
+  { id: 'pony' as RacerType, label: 'Ngựa bông', emoji: '🐎' },
+  { id: 'corgi' as RacerType, label: 'Cún Corgi', emoji: '🐕' },
+  { id: 'runner' as RacerType, label: 'Chibi chạy bộ', emoji: '🏃' },
 ];
 
 function initial() {
@@ -63,6 +72,12 @@ function App() {
   const [message, setMessage] = useState('');
   const [search, setSearch] = useState('');
 
+  // Race Mode States
+  const [roomId, setRoomId] = useState('RACE-8821');
+  const [racerType, setRacerType] = useState<RacerType>('duck');
+  const [raceSeed, setRaceSeed] = useState(12345);
+  const [racePodium, setRacePodium] = useState<Student[] | null>(null);
+
   const busy = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const audio = useRef<GameAudio | null>(null);
@@ -74,6 +89,7 @@ function App() {
   const present = current ? eligible(current, false) : [];
   const pool = current ? eligible(current, noRepeat) : [];
   const resultIsGroups = session?.history[0]?.kind === 'Chia nhóm';
+  const resultIsRace = session?.history[0]?.kind === 'Trường đua thú';
   const stale =
     !!current &&
     !!session?.groups.some((g) => g.members.length) &&
@@ -164,6 +180,12 @@ function App() {
     else playAudio(true);
   }
 
+  function generateNewRoom() {
+    const randomCode = 'RACE-' + Math.floor(1000 + Math.random() * 9000);
+    setRoomId(randomCode);
+    notify(`Đã tạo phòng đua mới: ${randomCode}`);
+  }
+
   function start() {
     if (busy.current || !current) return;
     try {
@@ -176,10 +198,12 @@ function App() {
         const selected = pick(pool, mode === 0 ? 1 : Number(count));
         names = selected.map((s) => s.name);
         chosen = selected.map((s) => s.id);
+        setRacePodium(null);
       } else if (mode === 2) {
         groups = divide(present, Number(groupValue), bySize);
         names = groups.map((g) => `${g.name}: ${g.members.map((s) => s.name).join(', ')}`);
-      } else {
+        setRacePodium(null);
+      } else if (mode === 3) {
         if (stale)
           throw Error('Nhóm cũ không còn khớp danh sách/điểm danh. Hãy chia lại hoặc cập nhật nhóm trước.');
         const eligibleGroups = current.session.groups.filter(
@@ -191,6 +215,27 @@ function App() {
         names = [g.name, ...g.members.map((s) => s.name)];
         groupChosen = [g.id];
         chosen = g.members.map((s) => s.id);
+        setRacePodium(null);
+      } else {
+        // Mode 4: Trường đua thú (Race Mode)
+        if (!present.length) throw Error('Không có sinh viên nào có mặt để tham gia cuộc đua.');
+        const newSeed = Math.floor(Math.random() * 1000000);
+        setRaceSeed(newSeed);
+
+        // Pre-determine race outcome deterministically from seed
+        const racers = shuffle(present.slice(0, 25));
+        setRacePodium(racers);
+
+        const top1 = racers[0];
+        const top2 = racers[1] || top1;
+        const top3 = racers[2] || top2;
+
+        names = [
+          `🥇 Top 1: ${top1.name}`,
+          `🥈 Top 2: ${top2.name}`,
+          `🥉 Top 3: ${top3.name}`,
+        ];
+        chosen = [top1.id];
       }
 
       busy.current = true;
@@ -244,6 +289,52 @@ function App() {
     } catch (e) {
       notify((e as Error).message);
     }
+  }
+
+  function callTopStudent(student: Student) {
+    if (!current) return;
+    update((c) => ({
+      ...c,
+      session: {
+        ...c.session,
+        called: [...new Set([...c.session.called, student.id])],
+        result: [`Mời bạn lên bảng: ${student.name}`],
+        history: [
+          {
+            id: uid(),
+            at: new Date().toISOString(),
+            kind: 'Đua Top 1 Lên Bảng',
+            names: [student.name],
+          },
+          ...c.session.history,
+        ].slice(0, 1000),
+      },
+    }));
+    notify(`Đã chọn ${student.name} lên bảng!`);
+  }
+
+  function callAllTop3(top3: Student[]) {
+    if (!current || !top3.length) return;
+    const ids = top3.map((s) => s.id);
+    const names = top3.map((s) => s.name);
+    update((c) => ({
+      ...c,
+      session: {
+        ...c.session,
+        called: [...new Set([...c.session.called, ...ids])],
+        result: names.map((n, i) => `Top ${i + 1}: ${n}`),
+        history: [
+          {
+            id: uid(),
+            at: new Date().toISOString(),
+            kind: 'Đua Top 1-2-3 Lên Bảng',
+            names,
+          },
+          ...c.session.history,
+        ].slice(0, 1000),
+      },
+    }));
+    notify(`Đã mời cả 3 bạn trong Top 3 lên bảng!`);
   }
 
   function newClass() {
@@ -453,7 +544,9 @@ function App() {
             <div className="game-toolbar">
               <div className="toolbar-info">
                 <span className="live-dot" />
-                <span className="theme-title">{concepts.find((c) => c.id === concept)?.title}</span>
+                <span className="theme-title">
+                  {mode === 4 ? `Trường đua thú (Phòng: ${roomId})` : concepts.find((c) => c.id === concept)?.title}
+                </span>
                 <span className="divider">/</span>
                 <span className="mode-title">{modes[mode].name}</span>
               </div>
@@ -488,13 +581,21 @@ function App() {
               </div>
             </div>
 
-            {/* High-Craft Three.js 3D Viewport */}
+            {/* High-Craft Three.js 3D Viewport with Velvet & Expanded Ground */}
             <Stage3D
               concept={concept}
               students={present}
               running={running}
               selected={selectedIds}
               groups={mode === 2 ? session?.groups || [] : []}
+              raceMode={mode === 4}
+              racerType={racerType}
+              raceSeed={raceSeed}
+              roomId={roomId}
+              onRaceFinish={(ranked) => {
+                setRacePodium(ranked);
+                finish();
+              }}
             />
 
             {/* Bottom Bar inside Stage */}
@@ -504,24 +605,30 @@ function App() {
                 <div>
                   <div className="status-main">
                     {running
-                      ? 'Đang tìm bạn may mắn nhất...'
-                      : mode < 2
-                        ? `${pool.length} bạn sẵn sàng lên bảng`
-                        : `${present.length} bạn có mặt`}
+                      ? mode === 4
+                        ? 'Các tay đua đang bứt tốc & vượt mặt kịch tính!'
+                        : 'Đang tìm bạn may mắn nhất...'
+                      : mode === 4
+                        ? `${Math.min(25, present.length)} tay đua sẵn sàng ở vạch xuất phát`
+                        : mode < 2
+                          ? `${pool.length} bạn sẵn sàng lên bảng`
+                          : `${present.length} bạn có mặt`}
                   </div>
                   <div className="status-sub">
                     {running
-                      ? 'Hồi hộp đếm ngược 10 giây...'
-                      : pool.length === 0 && mode < 2
-                        ? 'Đã gọi hết cả lớp! Hãy mở Lịch sử để đặt lại.'
-                        : 'Thuật toán ngẫu nhiên Crypto · Không thiên vị'}
+                      ? 'Nhiều cú twist bất ngờ, chưa biết ai dẫn đầu!'
+                      : mode === 4
+                        ? 'Chất liệu vải nhung 3D · Mặt đất mở rộng · Đua thú Top 1-2-3'
+                        : pool.length === 0 && mode < 2
+                          ? 'Đã gọi hết cả lớp! Hãy mở Lịch sử để đặt lại.'
+                          : 'Mặt đất mở rộng · Nhân vật vải nhung 3D mềm mại'}
                   </div>
                 </div>
               </div>
 
               {running ? (
                 <button className="primary-action-btn skip" onClick={finish}>
-                  <span>Bỏ qua hoạt cảnh</span>
+                  <span>{mode === 4 ? 'Xem kết quả đích' : 'Bỏ qua hoạt cảnh'}</span>
                   <ArrowRight size={17} />
                 </button>
               ) : (
@@ -532,13 +639,15 @@ function App() {
                 >
                   <Play size={18} fill="currentColor" />
                   <span>
-                    {mode === 2
-                      ? 'Chia nhóm ngay'
-                      : mode === 3
-                        ? 'Bốc thăm nhóm'
-                        : mode === 1
-                          ? 'Gọi các bạn'
-                          : 'Gọi một bạn'}
+                    {mode === 4
+                      ? 'Xuất phát cuộc đua 🏁'
+                      : mode === 2
+                        ? 'Chia nhóm ngay'
+                        : mode === 3
+                          ? 'Bốc thăm nhóm'
+                          : mode === 1
+                            ? 'Gọi các bạn'
+                            : 'Gọi một bạn'}
                   </span>
                 </button>
               )}
@@ -546,46 +655,48 @@ function App() {
           </div>
         </section>
 
-        {/* Playful Theme / Sân chơi Selector */}
-        <section className="theme-selector-section">
-          <div className="section-header">
-            <span className="section-title">Chọn sân chơi 3D</span>
-            <span className="section-subtitle">Mỗi thế giới có linh vật, hoạt cảnh & âm nhạc riêng biệt</span>
-          </div>
+        {/* Playful Theme Selector (Only in normal modes) */}
+        {mode !== 4 && (
+          <section className="theme-selector-section">
+            <div className="section-header">
+              <span className="section-title">Chọn sân chơi 3D</span>
+              <span className="section-subtitle">Chất liệu vải nhung 3D mềm mại & mặt đất mở rộng</span>
+            </div>
 
-          <div className="concept-cards-grid">
-            {concepts.map((c) => {
-              const active = concept === c.id;
-              return (
-                <button
-                  key={c.id}
-                  disabled={running}
-                  className={`concept-pill-card ${c.id} ${active ? 'active' : ''}`}
-                  onClick={() => setConcept(c.id)}
-                >
-                  <div className="concept-card-icon">
-                    <Mascot concept={c.id} />
-                  </div>
-                  <div className="concept-card-body">
-                    <div className="concept-tag">{c.tag}</div>
-                    <div className="concept-name">{c.title}</div>
-                    <div className="concept-sub">{c.sub}</div>
-                  </div>
-                  {active && (
-                    <span className="active-badge">
-                      <Check size={13} />
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        </section>
+            <div className="concept-cards-grid">
+              {concepts.map((c) => {
+                const active = concept === c.id;
+                return (
+                  <button
+                    key={c.id}
+                    disabled={running}
+                    className={`concept-pill-card ${c.id} ${active ? 'active' : ''}`}
+                    onClick={() => setConcept(c.id)}
+                  >
+                    <div className="concept-card-icon">
+                      <Mascot concept={c.id} />
+                    </div>
+                    <div className="concept-card-body">
+                      <div className="concept-tag">{c.tag}</div>
+                      <div className="concept-name">{c.title}</div>
+                      <div className="concept-sub">{c.sub}</div>
+                    </div>
+                    {active && (
+                      <span className="active-badge">
+                        <Check size={13} />
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         {/* Floating Activity & Mode Selector Dock */}
         <section className="activity-dock-section">
           <div className="dock-card">
-            <div className="dock-modes-nav">
+            <div className="dock-modes-nav five-modes">
               {modes.map((m, i) => {
                 const active = mode === i;
                 const Icon = m.icon;
@@ -746,6 +857,49 @@ function App() {
                   </div>
                 </div>
               )}
+
+              {/* Mode 4: Trường Đua Thú (Race Room Configuration) */}
+              {mode === 4 && (
+                <div className="param-item column">
+                  <div className="race-settings-bar">
+                    {/* Room ID Pill */}
+                    <div className="room-id-box">
+                      <span className="room-label">MÃ PHÒNG ĐUA:</span>
+                      <input
+                        className="room-input"
+                        value={roomId}
+                        maxLength={20}
+                        onChange={(e) => setRoomId(e.target.value.toUpperCase())}
+                      />
+                      <button className="icon-action-btn" title="Tạo mã phòng mới" onClick={generateNewRoom}>
+                        <Dice5 size={14} />
+                      </button>
+                    </div>
+
+                    <span className="race-slots-tag">
+                      🏎️ {Math.min(25, present.length)} / 25 bạn tham gia đua
+                    </span>
+                  </div>
+
+                  {/* Racer Mounts Selector */}
+                  <div className="mount-picker-row">
+                    <span className="mount-picker-label">Chọn linh vật đua:</span>
+                    <div className="mount-pills-list">
+                      {RACER_MOUNTS.map((m) => (
+                        <button
+                          key={m.id}
+                          disabled={running}
+                          className={`mount-pill-btn ${racerType === m.id ? 'active' : ''}`}
+                          onClick={() => setRacerType(m.id)}
+                        >
+                          <span className="mount-emoji">{m.emoji}</span>
+                          <span className="mount-name">{m.label}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </section>
@@ -770,11 +924,15 @@ function App() {
               <div className="section-label">BẢNG KẾT QUẢ</div>
               <h3>
                 {running
-                  ? 'Cả lớp đang rượt đuổi sôi nổi...'
+                  ? mode === 4
+                    ? 'Cuộc đua đang diễn ra gay cấn...'
+                    : 'Cả lớp đang rượt đuổi sôi nổi...'
                   : session?.result.length
-                    ? resultIsGroups
-                      ? 'Kết quả chia nhóm lớp học'
-                      : 'Chúc mừng bạn đã được chọn!'
+                    ? resultIsRace
+                      ? 'BỤC VINH QUANG TRƯỜNG ĐUA'
+                      : resultIsGroups
+                        ? 'Kết quả chia nhóm lớp học'
+                        : 'Chúc mừng bạn đã được chọn!'
                     : 'Chưa có lượt gọi nào'}
               </h3>
             </div>
@@ -789,93 +947,165 @@ function App() {
 
           {!running && !!session?.result.length ? (
             <div className="result-display-card" aria-live="polite">
-              <div className="result-announcement">
-                <Sparkles size={16} />
-                <span>{concepts.find((c) => c.id === concept)?.line}</span>
-              </div>
+              {/* PODIUM TOP 1-2-3 (Khi vừa đua xong) */}
+              {resultIsRace && racePodium && racePodium.length >= 3 ? (
+                <div className="race-podium-showcase">
+                  <div className="podium-congrats-tag">
+                    <Trophy size={18} />
+                    <span>CUỘC ĐUA KẾT THÚC · VINH DANH TOP 3</span>
+                  </div>
 
-              {resultIsGroups ? (
-                <div className="groups-card-grid">
-                  {session.groups.map((g, i) => (
-                    <article className="group-detail-card" key={g.id}>
-                      <div className="group-card-top">
-                        <span className="group-num-badge">{String(i + 1).padStart(2, '0')}</span>
-                        <input
-                          aria-label={'Tên nhóm ' + (i + 1)}
-                          value={g.name}
-                          maxLength={150}
-                          onBlur={() => {
-                            if (!g.name.trim())
-                              update((c) => ({
-                                ...c,
-                                session: {
-                                  ...c.session,
-                                  groups: c.session.groups.map((x) =>
-                                    x.id === g.id ? { ...x, name: 'Nhóm ' + (i + 1) } : x
-                                  ),
-                                },
-                              }));
-                          }}
-                          onChange={(e) =>
-                            update((c) => ({
-                              ...c,
-                              session: {
-                                ...c.session,
-                                groups: c.session.groups.map((x) =>
-                                  x.id === g.id ? { ...x, name: e.target.value || 'Nhóm' } : x
-                                ),
-                              },
-                            }))
-                          }
-                        />
-                        <span className="member-count-pill">{g.members.length} bạn</span>
+                  <div className="podium-grid">
+                    {/* Top 2: Á quân */}
+                    <div className="podium-column rank-2">
+                      <div className="medal-icon silver">🥈</div>
+                      <div className="racer-card">
+                        <span className="racer-tag">Á QUÂN (TOP 2)</span>
+                        <strong className="racer-name">{racePodium[1]?.name}</strong>
+                        {racePodium[1]?.code && <span className="racer-code">{racePodium[1]?.code}</span>}
                       </div>
+                      <div className="podium-stand stand-2">2</div>
+                    </div>
 
-                      <ol className="group-members-list">
-                        {g.members.map((student) => (
-                          <li key={student.id}>
-                            <span className="member-name">{student.name}</span>
-                            {student.code && <span className="member-code">{student.code}</span>}
-                          </li>
-                        ))}
-                      </ol>
-                    </article>
-                  ))}
+                    {/* Top 1: Quán quân */}
+                    <div className="podium-column rank-1">
+                      <div className="crown-badge">👑</div>
+                      <div className="medal-icon gold">🥇</div>
+                      <div className="racer-card highlight">
+                        <span className="racer-tag gold">QUÁN QUÂN (TOP 1)</span>
+                        <strong className="racer-name">{racePodium[0]?.name}</strong>
+                        {racePodium[0]?.code && <span className="racer-code">{racePodium[0]?.code}</span>}
+                      </div>
+                      <div className="podium-stand stand-1">1</div>
+                    </div>
+
+                    {/* Top 3: Quý quân */}
+                    <div className="podium-column rank-3">
+                      <div className="medal-icon bronze">🥉</div>
+                      <div className="racer-card">
+                        <span className="racer-tag">QUÝ QUÂN (TOP 3)</span>
+                        <strong className="racer-name">{racePodium[2]?.name}</strong>
+                        {racePodium[2]?.code && <span className="racer-code">{racePodium[2]?.code}</span>}
+                      </div>
+                      <div className="podium-stand stand-3">3</div>
+                    </div>
+                  </div>
+
+                  {/* Quick actions for Race */}
+                  <div className="podium-actions-bar">
+                    <button className="primary-action-btn" onClick={() => callTopStudent(racePodium[0])}>
+                      <GraduationCap size={16} />
+                      <span>Mời Top 1 lên bảng ({racePodium[0].name.split(' ').slice(-2).join(' ')})</span>
+                    </button>
+                    <button className="secondary-btn" onClick={() => callAllTop3(racePodium.slice(0, 3))}>
+                      <Users size={15} />
+                      <span>Mời cả Top 1, 2, 3 lên bảng</span>
+                    </button>
+                    <button className="secondary-btn" onClick={start}>
+                      <RotateCcw size={15} />
+                      <span>Đua vòng mới 🏁</span>
+                    </button>
+                  </div>
                 </div>
               ) : (
-                <div className="names-callout-grid">
-                  {session.result.map((name, i) => (
-                    <div className="called-name-chip" key={i}>
-                      <span className="star-icon">✦</span>
-                      <span className="name-text">{name}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
+                <>
+                  <div className="result-announcement">
+                    <Sparkles size={16} />
+                    <span>{concepts.find((c) => c.id === concept)?.line}</span>
+                  </div>
 
-              {resultIsGroups && (
-                <div className="group-quick-actions">
-                  <button
-                    className="secondary-btn"
-                    onClick={() => {
-                      setMode(2);
-                      notify('Điều chỉnh thông số chia nhóm rồi bấm Chia nhóm ngay.');
-                    }}
-                  >
-                    <Shuffle size={15} />
-                    <span>Chia lại các nhóm</span>
-                  </button>
-                  <button className="secondary-btn" onClick={() => setMode(3)}>
-                    <Layers size={15} />
-                    <span>Bốc thăm các nhóm này</span>
-                  </button>
-                </div>
+                  {resultIsGroups ? (
+                    <div className="groups-card-grid">
+                      {session.groups.map((g, i) => (
+                        <article className="group-detail-card" key={g.id}>
+                          <div className="group-card-top">
+                            <span className="group-num-badge">{String(i + 1).padStart(2, '0')}</span>
+                            <input
+                              aria-label={'Tên nhóm ' + (i + 1)}
+                              value={g.name}
+                              maxLength={150}
+                              onBlur={() => {
+                                if (!g.name.trim())
+                                  update((c) => ({
+                                    ...c,
+                                    session: {
+                                      ...c.session,
+                                      groups: c.session.groups.map((x) =>
+                                        x.id === g.id ? { ...x, name: 'Nhóm ' + (i + 1) } : x
+                                      ),
+                                    },
+                                  }));
+                              }}
+                              onChange={(e) =>
+                                update((c) => ({
+                                  ...c,
+                                  session: {
+                                    ...c.session,
+                                    groups: c.session.groups.map((x) =>
+                                      x.id === g.id ? { ...x, name: e.target.value || 'Nhóm' } : x
+                                    ),
+                                  },
+                                }))
+                              }
+                            />
+                            <span className="member-count-pill">{g.members.length} bạn</span>
+                          </div>
+
+                          <ol className="group-members-list">
+                            {g.members.map((student) => (
+                              <li key={student.id}>
+                                <span className="member-name">{student.name}</span>
+                                {student.code && <span className="member-code">{student.code}</span>}
+                              </li>
+                            ))}
+                          </ol>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="names-callout-grid">
+                      {session.result.map((name, i) => (
+                        <div className="called-name-chip" key={i}>
+                          <span className="star-icon">✦</span>
+                          <span className="name-text">{name}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {resultIsGroups && (
+                    <div className="group-quick-actions">
+                      <button
+                        className="secondary-btn"
+                        onClick={() => {
+                          setMode(2);
+                          notify('Điều chỉnh thông số chia nhóm rồi bấm Chia nhóm ngay.');
+                        }}
+                      >
+                        <Shuffle size={15} />
+                        <span>Chia lại các nhóm</span>
+                      </button>
+                      <button className="secondary-btn" onClick={() => setMode(3)}>
+                        <Layers size={15} />
+                        <span>Bốc thăm các nhóm này</span>
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           ) : (
             <div className="empty-results-box">
               <Sparkles size={28} className="empty-sparkle" />
-              <p>{running ? 'Kết quả sẽ hiển thị ngay khi linh vật tiếp cận mục tiêu.' : 'Bấm nút gọi bạn để bắt đầu lượt chơi đầu tiên.'}</p>
+              <p>
+                {running
+                  ? mode === 4
+                    ? 'Các tay đua đang phi nước đại về đích...'
+                    : 'Kết quả sẽ hiển thị ngay khi linh vật tiếp cận mục tiêu.'
+                  : mode === 4
+                    ? 'Bấm nút "Xuất phát cuộc đua 🏁" để bắt đầu vòng đua kịch tính!'
+                    : 'Bấm nút gọi bạn để bắt đầu lượt chơi đầu tiên.'}
+              </p>
             </div>
           )}
         </section>
@@ -884,7 +1114,7 @@ function App() {
         <footer className="footer-bar">
           <div className="footer-left">
             <GraduationCap size={16} />
-            <span>Ai Lên Bảng? — Trợ lý lớp học ngẫu nhiên 3D</span>
+            <span>Ai Lên Bảng? — Trợ lý lớp học ngẫu nhiên 3D vải nhung</span>
           </div>
           <div className="footer-right">
             <span>Dữ liệu an toàn & lưu trữ 100% trên trình duyệt của bạn</span>
@@ -1099,7 +1329,7 @@ function App() {
                 <div className="students-scroll-list">
                   {current.students
                     .filter((s) => `${s.name} ${s.code}`.toLowerCase().includes(search.toLowerCase()))
-                    .map((s, i) => {
+                    .map((s) => {
                       const isAbsent = session?.absent.includes(s.id);
                       return (
                         <div className={`student-item-row ${isAbsent ? 'absent' : 'present'}`} key={s.id}>
@@ -1233,7 +1463,7 @@ function App() {
                             ...c.session,
                             called: [],
                             history: c.session.history.filter(
-                              (t) => t.kind !== 'Chọn một người' && t.kind !== 'Chọn nhiều người'
+                              (t) => t.kind !== 'Chọn một người' && t.kind !== 'Chọn nhiều người' && t.kind !== 'Trường đua thú'
                             ),
                           },
                         }));
